@@ -1,0 +1,108 @@
+PROGRAM STRUCTURE – SMART CURRENCY CONVERTER
+1. Packages & Imports
+
+java.sql.* → Database connectivity (JDBC)
+
+java.util.* → Scanner, List, Map, Collections
+
+2. Interface
+ConverterService
+
+Declares convert() method.
+
+Ensures any converter class must implement conversion logic.
+
+3. Custom Exception
+InvalidCurrencyException
+
+Handles invalid currency codes.
+
+Used when user enters unsupported currency.
+
+4. Base Class (Abstraction)
+RateProvider (abstract)
+
+Contains a map of currency rates.
+
+Abstract method loadRates().
+
+Has method getRate() that throws exception if invalid.
+
+5. Child Class (Inheritance + Polymorphism)
+StaticRateProvider
+
+Extends RateProvider.
+
+Implements loadRates() with static currency values.
+
+6. Service Class (Interface Implementation)
+CurrencyConverter
+
+Implements ConverterService.
+
+Uses RateProvider (polymorphism).
+
+Converts amount from one currency to another using USD as a base.
+
+7. POJO Class
+ConversionRecord
+
+Represents a conversion transaction.
+
+Used for Collection history and database storage.
+
+8. Database Helper
+DBHelper
+
+Provides getConnection().
+
+Stores DB URL, username, password.
+
+9. DAO Layer (Database Operations)
+ConversionDAO
+
+Inserts conversion record into DB.
+
+Uses JDBC PreparedStatement.
+
+10. Multithreading
+LoggerThread
+
+Accepts list of conversion records.
+
+Synchronized block ensures thread-safe logging.
+
+Prints conversion logs in background.
+
+11. Main Application
+SmartCurrencyConverter (main class)
+
+Creates Scanner.
+
+Uses polymorphism → new CurrencyConverter(new StaticRateProvider())
+
+Creates:
+
+history (List of ConversionRecord)
+
+ConversionDAO object
+
+Takes user input:
+
+amount
+
+source currency
+
+target currency
+
+Performs:
+
+Conversion
+
+Adds record to list
+
+Saves to database
+
+Starts logging thread
+
+Ends when amount entered is 0.
