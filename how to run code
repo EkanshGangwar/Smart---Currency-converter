@@ -1,0 +1,88 @@
+HOW TO RUN THE CODE (Step-by-Step)
+✔ Step 1: Install Required Software
+1. Java JDK (8 or above)
+
+Download & install:
+https://www.oracle.com/java/technologies/downloads/
+
+Check installation:
+
+java -version
+
+2. MySQL Server + MySQL Workbench
+
+Download MySQL:
+https://dev.mysql.com/downloads/
+
+Check installation:
+
+mysql --version
+
+3. MySQL JDBC Driver (IMPORTANT)
+
+Download MySQL Connector/J:
+https://dev.mysql.com/downloads/connector/j/
+
+Extract → copy the file:
+
+mysql-connector-j-8.x.x.jar
+
+
+Keep it ready.
+
+✔ Step 2: Create MySQL Database
+
+Open MySQL Workbench or terminal and run:
+
+CREATE DATABASE converterdb;
+
+USE converterdb;
+
+CREATE TABLE conversion_history (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    amount DOUBLE,
+    source VARCHAR(10),
+    target VARCHAR(10),
+    result DOUBLE
+);
+
+✔ Step 3: Update DB Credentials in Code
+
+In DBHelper class, update:
+
+private static final String USER = "root";
+private static final String PASS = "your_password";
+
+
+Replace "your_password" with your MySQL password.
+
+✔ Step 4: Save Your Java File
+
+Name it:
+
+SmartCurrencyConverter.java
+
+✔ Step 5: Compile Java File
+
+Open terminal / CMD in folder where file is saved:
+
+Windows CMD
+javac -cp .;mysql-connector-j-8.x.x.jar SmartCurrencyConverter.java
+
+Mac/Linux
+javac -cp .:mysql-connector-j-8.x.x.jar SmartCurrencyConverter.java
+
+✔ Step 6: Run the Program
+Windows
+java -cp .;mysql-connector-j-8.x.x.jar SmartCurrencyConverter
+
+Mac/Linux
+java -cp .:mysql-connector-j-8.x.x.jar SmartCurrencyConverter
+
+🚀 YOU WILL SEE THIS OUTPUT:
+===== SMART CURRENCY CONVERTER =====
+
+Enter amount (or 0 to exit):
+
+
+Then you can start converting currencies.
