@@ -1,15 +1,19 @@
 import java.sql.*;
 import java.util.*;
+import java.util.concurrent.*;
+import java.net.*;
+import java.io.*;
+import com.google.gson.*;
 
 // --------------------------------------------------------
 // 1. INTERFACE  (OOP Feature)
 // --------------------------------------------------------
 interface ConverterService {
-    double convert(double amount, String from, String to) throws InvalidCurrencyException;
+    CompletableFuture<Double> convert(double amount, String from, String to) throws InvalidCurrencyException;
 }
 
 // --------------------------------------------------------
-// 2. CUSTOM EXCEPTION (OOP Feature)
+// 2. CUSTOM EXCEPTION
 // --------------------------------------------------------
 class InvalidCurrencyException extends Exception {
     public InvalidCurrencyException(String msg) {
@@ -18,58 +22,98 @@ class InvalidCurrencyException extends Exception {
 }
 
 // --------------------------------------------------------
-// 3. BASE CLASS & INHERITANCE (OOP Feature)
+// 3. BASE CLASS (INHERITANCE)
 // --------------------------------------------------------
 abstract class RateProvider {
-    protected Map<String, Double> rates = new HashMap<>();
-
-    public abstract void loadRates();
-
-    public double getRate(String c) throws InvalidCurrencyException {
-        if (!rates.containsKey(c))
-            throw new InvalidCurrencyException("Invalid Currency Code: " + c);
-        return rates.get(c);
-    }
+    public abstract CompletableFuture<Double> getRate(String currency) throws InvalidCurrencyException;
 }
 
 // --------------------------------------------------------
-// 4. CHILD CLASS (Polymorphism & Inheritance)
+// 4. LIVE API PROVIDER (Async HTTP + Polymorphism)
 // --------------------------------------------------------
-class StaticRateProvider extends RateProvider {
+class LiveAPIRateProvider extends RateProvider {
+
+    private static final String API_URL = "https://api.exchangerate.host/latest?base=USD";
+
+    private Map<String, Double> cachedRates = new ConcurrentHashMap<>();
+    private long lastFetched = 0;
 
     @Override
-    public void loadRates() {
-        rates.put("USD", 1.0);
-        rates.put("INR", 83.0);
-        rates.put("EUR", 0.92);
-        rates.put("GBP", 0.79);
-        rates.put("AUD", 1.49);
-        rates.put("CAD", 1.33);
-        rates.put("JPY", 151.20);
+    public CompletableFuture<Double> getRate(String currency) throws InvalidCurrencyException {
+
+        if (currency == null || currency.isEmpty())
+            throw new InvalidCurrencyException("Currency cannot be empty");
+
+        long now = System.currentTimeMillis();
+
+        // Cache expiration = 10 minutes
+        if (!cachedRates.isEmpty() && (now - lastFetched) < (10 * 60 * 1000)) {
+            if (!cachedRates.containsKey(currency))
+                throw new InvalidCurrencyException("Invalid Currency Code: " + currency);
+            return CompletableFuture.completedFuture(cachedRates.get(currency));
+        }
+
+        // Fetch live rates asynchronously
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                URL url = new URL(API_URL);
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("GET");
+
+                BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                String line, response = "";
+                while ((line = br.readLine()) != null) response += line;
+                br.close();
+
+                JsonObject json = JsonParser.parseString(response).getAsJsonObject();
+                JsonObject ratesJson = json.getAsJsonObject("rates");
+
+                cachedRates.clear();
+                for (String key : ratesJson.keySet()) {
+                    cachedRates.put(key, ratesJson.get(key).getAsDouble());
+                }
+                lastFetched = System.currentTimeMillis();
+
+                if (!cachedRates.containsKey(currency))
+                    throw new InvalidCurrencyException("Invalid Currency: " + currency);
+
+                return cachedRates.get(currency);
+
+            } catch (Exception e) {
+                throw new CompletionException(
+                    new InvalidCurrencyException("Failed to fetch live rates.")
+                );
+            }
+        });
     }
 }
 
 // --------------------------------------------------------
-// 5. SERVICE IMPLEMENTATION  (OOP + Polymorphism)
+// 5. SERVICE IMPLEMENTATION  (ASYNC + POLYMORPHISM)
 // --------------------------------------------------------
 class CurrencyConverter implements ConverterService {
 
     private RateProvider provider;
 
-    public CurrencyConverter(RateProvider p) {
-        this.provider = p;
-        provider.loadRates();
+    public CurrencyConverter(RateProvider provider) {
+        this.provider = provider;
     }
 
     @Override
-    public double convert(double amount, String from, String to) throws InvalidCurrencyException {
-        double usd = amount / provider.getRate(from);
-        return usd * provider.getRate(to);
+    public CompletableFuture<Double> convert(double amount, String from, String to) throws InvalidCurrencyException {
+
+        CompletableFuture<Double> fromRate = provider.getRate(from);
+        CompletableFuture<Double> toRate = provider.getRate(to);
+
+        return fromRate.thenCombine(toRate, (fRate, tRate) -> {
+            double usd = amount / fRate;  // convert to USD first
+            return usd * tRate;
+        });
     }
 }
 
 // --------------------------------------------------------
-// 6. COLLECTIONS + GENERICS (List<ConversionRecord>)
+// 6. COLLECTION CLASS
 // --------------------------------------------------------
 class ConversionRecord {
     double amount;
@@ -85,7 +129,7 @@ class ConversionRecord {
 }
 
 // --------------------------------------------------------
-// 7. DATABASE HELPER (JDBC)
+// 7. JDBC HELPER
 // --------------------------------------------------------
 class DBHelper {
 
@@ -99,7 +143,7 @@ class DBHelper {
 }
 
 // --------------------------------------------------------
-// 8. DAO CLASS FOR DATABASE OPERATIONS (JDBC Implementation)
+// 8. DAO CLASS
 // --------------------------------------------------------
 class ConversionDAO {
 
@@ -123,7 +167,7 @@ class ConversionDAO {
 }
 
 // --------------------------------------------------------
-// 9. MULTITHREADING & SYNCHRONIZATION
+// 9. LOGGER THREAD
 // --------------------------------------------------------
 class LoggerThread extends Thread {
 
@@ -146,7 +190,7 @@ class LoggerThread extends Thread {
 }
 
 // --------------------------------------------------------
-// 10. MAIN APPLICATION (ALL FEATURES USED)
+// 10. MAIN APPLICATION (ASYNC + LIVE API)
 // --------------------------------------------------------
 public class SmartCurrencyConverter {
 
@@ -154,16 +198,11 @@ public class SmartCurrencyConverter {
 
         Scanner sc = new Scanner(System.in);
 
-        // OOP Polymorphism
-        ConverterService converter = new CurrencyConverter(new StaticRateProvider());
-
-        // Collections + Generics
+        ConverterService converter = new CurrencyConverter(new LiveAPIRateProvider());
         List<ConversionRecord> history = new ArrayList<>();
-
-        // DAO
         ConversionDAO dao = new ConversionDAO();
 
-        System.out.println("===== SMART CURRENCY CONVERTER =====");
+        System.out.println("===== SMART LIVE CURRENCY CONVERTER =====");
 
         while (true) {
 
@@ -178,24 +217,24 @@ public class SmartCurrencyConverter {
             String to = sc.next().toUpperCase();
 
             try {
-                double result = converter.convert(amount, from, to);
+                CompletableFuture<Double> future = converter.convert(amount, from, to);
 
-                System.out.println("\n----------------------------------");
+                System.out.println("\nFetching Live Rates... Please wait...\n");
+
+                double result = future.get();  // waits for async result
+
+                System.out.println("----------------------------------");
                 System.out.println(amount + " " + from + " = " + result + " " + to);
                 System.out.println("----------------------------------");
 
                 ConversionRecord record = new ConversionRecord(amount, from, to, result);
 
-                // Add to collection
                 history.add(record);
-
-                // Save to DB
                 dao.saveRecord(record);
 
-                // Start logger thread
                 new LoggerThread(history).start();
 
-            } catch (InvalidCurrencyException e) {
+            } catch (Exception e) {
                 System.out.println("Error: " + e.getMessage());
             }
         }
