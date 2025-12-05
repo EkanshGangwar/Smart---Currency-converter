@@ -1,245 +1,112 @@
-import java.sql.*;
-import java.util.*;
-import java.util.concurrent.*;
-import java.net.*;
-import java.io.*;
-import com.google.gson.*;
+import javafx.application.Application;
+import javafx.application.Platform;
+import javafx.geometry.Insets;
+import javafx.scene.Scene;
+import javafx.scene.control.*;
+import javafx.scene.layout.*;
+import javafx.stage.Stage;
 
-// --------------------------------------------------------
-// 1. INTERFACE  (OOP Feature)
-// --------------------------------------------------------
-interface ConverterService {
-    CompletableFuture<Double> convert(double amount, String from, String to) throws InvalidCurrencyException;
-}
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.Scanner;
+import java.util.concurrent.CompletableFuture;
 
-// --------------------------------------------------------
-// 2. CUSTOM EXCEPTION
-// --------------------------------------------------------
-class InvalidCurrencyException extends Exception {
-    public InvalidCurrencyException(String msg) {
-        super(msg);
-    }
-}
+public class SmartCurrencyConverterFX extends Application {
 
-// --------------------------------------------------------
-// 3. BASE CLASS (INHERITANCE)
-// --------------------------------------------------------
-abstract class RateProvider {
-    public abstract CompletableFuture<Double> getRate(String currency) throws InvalidCurrencyException;
-}
-
-// --------------------------------------------------------
-// 4. LIVE API PROVIDER (Async HTTP + Polymorphism)
-// --------------------------------------------------------
-class LiveAPIRateProvider extends RateProvider {
-
-    private static final String API_URL = "https://api.exchangerate.host/latest?base=USD";
-
-    private Map<String, Double> cachedRates = new ConcurrentHashMap<>();
-    private long lastFetched = 0;
+    private static final String API_URL = "https://api.exchangerate.host/latest?base=";
 
     @Override
-    public CompletableFuture<Double> getRate(String currency) throws InvalidCurrencyException {
+    public void start(Stage stage) {
 
-        if (currency == null || currency.isEmpty())
-            throw new InvalidCurrencyException("Currency cannot be empty");
+        Label title = new Label("Smart Currency Converter (Live Rates)");
+        title.setStyle("-fx-font-size: 22px; -fx-font-weight: bold;");
 
-        long now = System.currentTimeMillis();
+        TextField amountField = new TextField();
+        amountField.setPromptText("Enter amount");
 
-        // Cache expiration = 10 minutes
-        if (!cachedRates.isEmpty() && (now - lastFetched) < (10 * 60 * 1000)) {
-            if (!cachedRates.containsKey(currency))
-                throw new InvalidCurrencyException("Invalid Currency Code: " + currency);
-            return CompletableFuture.completedFuture(cachedRates.get(currency));
-        }
+        TextField fromField = new TextField();
+        fromField.setPromptText("From (USD)");
 
-        // Fetch live rates asynchronously
-        return CompletableFuture.supplyAsync(() -> {
+        TextField toField = new TextField();
+        toField.setPromptText("To (INR)");
+
+        Button convertBtn = new Button("Convert");
+        convertBtn.setStyle("-fx-font-size: 16px; -fx-padding: 8px 20px;");
+
+        Label resultLabel = new Label();
+        Label statusLabel = new Label();
+
+        VBox root = new VBox(12, title, amountField, fromField, toField, convertBtn, resultLabel, statusLabel);
+        root.setPadding(new Insets(20));
+        root.setStyle("-fx-background-color: #e8efff;");
+
+        convertBtn.setOnAction(e -> {
+            resultLabel.setText("");
+            statusLabel.setText("Fetching live rates...");
+
             try {
-                URL url = new URL(API_URL);
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                conn.setRequestMethod("GET");
+                double amount = Double.parseDouble(amountField.getText());
+                String from = fromField.getText().toUpperCase();
+                String to = toField.getText().toUpperCase();
 
-                BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-                String line, response = "";
-                while ((line = br.readLine()) != null) response += line;
-                br.close();
-
-                JsonObject json = JsonParser.parseString(response).getAsJsonObject();
-                JsonObject ratesJson = json.getAsJsonObject("rates");
-
-                cachedRates.clear();
-                for (String key : ratesJson.keySet()) {
-                    cachedRates.put(key, ratesJson.get(key).getAsDouble());
-                }
-                lastFetched = System.currentTimeMillis();
-
-                if (!cachedRates.containsKey(currency))
-                    throw new InvalidCurrencyException("Invalid Currency: " + currency);
-
-                return cachedRates.get(currency);
-
-            } catch (Exception e) {
-                throw new CompletionException(
-                    new InvalidCurrencyException("Failed to fetch live rates.")
-                );
+                convertAsync(amount, from, to).thenAccept(rate -> {
+                    Platform.runLater(() -> {
+                        if (rate == -1) {
+                            statusLabel.setText("Error: Invalid currency or network issue");
+                        } else {
+                            double converted = rate * amount;
+                            resultLabel.setText(amount + " " + from + " = " + converted + " " + to);
+                            statusLabel.setText("Live rate fetched successfully");
+                        }
+                    });
+                });
+            } catch (Exception ex) {
+                statusLabel.setText("Please enter valid values");
             }
         });
-    }
-}
 
-// --------------------------------------------------------
-// 5. SERVICE IMPLEMENTATION  (ASYNC + POLYMORPHISM)
-// --------------------------------------------------------
-class CurrencyConverter implements ConverterService {
-
-    private RateProvider provider;
-
-    public CurrencyConverter(RateProvider provider) {
-        this.provider = provider;
+        stage.setScene(new Scene(root, 400, 350));
+        stage.setTitle("Smart Currency Converter");
+        stage.show();
     }
 
-    @Override
-    public CompletableFuture<Double> convert(double amount, String from, String to) throws InvalidCurrencyException {
-
-        CompletableFuture<Double> fromRate = provider.getRate(from);
-        CompletableFuture<Double> toRate = provider.getRate(to);
-
-        return fromRate.thenCombine(toRate, (fRate, tRate) -> {
-            double usd = amount / fRate;  // convert to USD first
-            return usd * tRate;
-        });
+    // ---------------- Asynchronous Conversion ----------------
+    public CompletableFuture<Double> convertAsync(double amount, String from, String to) {
+        return CompletableFuture.supplyAsync(() -> fetchRate(from, to));
     }
-}
 
-// --------------------------------------------------------
-// 6. COLLECTION CLASS
-// --------------------------------------------------------
-class ConversionRecord {
-    double amount;
-    String from, to;
-    double result;
+    // ---------------- Live Rate Fetch (No Gson) ----------------
+    public double fetchRate(String from, String to) {
+        try {
+            URL url = new URL(API_URL + from + "&symbols=" + to);
 
-    public ConversionRecord(double amount, String from, String to, double result) {
-        this.amount = amount;
-        this.from = from;
-        this.to = to;
-        this.result = result;
-    }
-}
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
 
-// --------------------------------------------------------
-// 7. JDBC HELPER
-// --------------------------------------------------------
-class DBHelper {
+            Scanner sc = new Scanner(conn.getInputStream());
+            StringBuilder response = new StringBuilder();
 
-    private static final String URL = "jdbc:mysql://localhost:3306/converterdb";
-    private static final String USER = "root";
-    private static final String PASS = "your_password";
+            while (sc.hasNext())
+                response.append(sc.nextLine());
+            sc.close();
 
-    public static Connection getConnection() throws SQLException {
-        return DriverManager.getConnection(URL, USER, PASS);
-    }
-}
+            // Extract rate manually (e.g., "INR":83.12)
+            String search = "\"" + to + "\":";
+            int index = response.indexOf(search);
+            if (index == -1) return -1;
 
-// --------------------------------------------------------
-// 8. DAO CLASS
-// --------------------------------------------------------
-class ConversionDAO {
+            int start = index + search.length();
+            int end = response.indexOf("}", start);
+            String rateStr = response.substring(start, end).trim();
 
-    public void saveRecord(ConversionRecord r) {
-        try (Connection con = DBHelper.getConnection()) {
-
-            String q = "INSERT INTO conversion_history(amount, source, target, result) VALUES(?,?,?,?)";
-            PreparedStatement ps = con.prepareStatement(q);
-            ps.setDouble(1, r.amount);
-            ps.setString(2, r.from);
-            ps.setString(3, r.to);
-            ps.setDouble(4, r.result);
-            ps.executeUpdate();
-
-            System.out.println("✔ Conversion Saved to Database!");
+            return Double.parseDouble(rateStr);
 
         } catch (Exception e) {
-            System.out.println("Database Error: " + e.getMessage());
+            return -1;
         }
     }
-}
-
-// --------------------------------------------------------
-// 9. LOGGER THREAD
-// --------------------------------------------------------
-class LoggerThread extends Thread {
-
-    private List<ConversionRecord> logs;
-
-    public LoggerThread(List<ConversionRecord> logs) {
-        this.logs = logs;
-    }
-
-    @Override
-    public void run() {
-        synchronized (logs) {
-            System.out.println("\n--- Background Logging Thread Started ---");
-            for (ConversionRecord r : logs) {
-                System.out.println("Log: " + r.amount + " " + r.from + " -> " + r.result + " " + r.to);
-            }
-            System.out.println("--- Logging Completed ---\n");
-        }
-    }
-}
-
-// --------------------------------------------------------
-// 10. MAIN APPLICATION (ASYNC + LIVE API)
-// --------------------------------------------------------
-public class SmartCurrencyConverter {
 
     public static void main(String[] args) {
-
-        Scanner sc = new Scanner(System.in);
-
-        ConverterService converter = new CurrencyConverter(new LiveAPIRateProvider());
-        List<ConversionRecord> history = new ArrayList<>();
-        ConversionDAO dao = new ConversionDAO();
-
-        System.out.println("===== SMART LIVE CURRENCY CONVERTER =====");
-
-        while (true) {
-
-            System.out.print("\nEnter amount (or 0 to exit): ");
-            double amount = sc.nextDouble();
-            if (amount == 0) break;
-
-            System.out.print("From Currency (USD/INR/EUR/GBP/AUD/CAD/JPY): ");
-            String from = sc.next().toUpperCase();
-
-            System.out.print("To Currency (USD/INR/EUR/GBP/AUD/CAD/JPY): ");
-            String to = sc.next().toUpperCase();
-
-            try {
-                CompletableFuture<Double> future = converter.convert(amount, from, to);
-
-                System.out.println("\nFetching Live Rates... Please wait...\n");
-
-                double result = future.get();  // waits for async result
-
-                System.out.println("----------------------------------");
-                System.out.println(amount + " " + from + " = " + result + " " + to);
-                System.out.println("----------------------------------");
-
-                ConversionRecord record = new ConversionRecord(amount, from, to, result);
-
-                history.add(record);
-                dao.saveRecord(record);
-
-                new LoggerThread(history).start();
-
-            } catch (Exception e) {
-                System.out.println("Error: " + e.getMessage());
-            }
-        }
-
-        sc.close();
-        System.out.println("Program Ended. Thank you!");
+        launch();
     }
 }
